@@ -1,0 +1,44 @@
+# PROYECTO_DIOT - Generador de Reportes Ford
+
+# Archivos de entrada (mensuales)
+input/
+output/
+processed/
+logs/
+
+# Catálogos (solo se sube FechaDOF inicial, se auto-actualiza)
+catalogos/*.xlsx
+
+# Variables de entorno (credenciales)
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Archivos temporales de Excel
+~$*.xlsx
+~$*.xlsb
+
+# Virtual environments
+venv/
+.venv/
+env/
