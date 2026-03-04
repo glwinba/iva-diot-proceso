@@ -1,13 +1,9 @@
 # PROYECTO_DIOT - Generador de Reportes Ford
 
-# Archivos de entrada (mensuales)
-input/
+# Archivos de salida
 output/
 processed/
 logs/
-
-# Catálogos (solo se sube FechaDOF inicial, se auto-actualiza)
-catalogos/*.xlsx
 
 # Variables de entorno (credenciales)
 .env
@@ -37,6 +33,7 @@ build/
 # Archivos temporales de Excel
 ~$*.xlsx
 ~$*.xlsb
+*.DS_Store
 
 # Virtual environments
 venv/
