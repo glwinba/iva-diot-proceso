@@ -648,7 +648,6 @@ class Reporte2IvaProveedor(BaseReporte):
             logger.info(f"   Prorrateo proporcional por Valor Comercial DLLS: {tiene_valor.sum()} registros")
 
             # === PASO 2: Valor Aduana MXN del 551 ===
-            # CAMBIO FORD: Usar ValorAduana (en MXN), NO ValorDolares (Valor Comercial DLLS)
             if 'Partidas' in sources:
                 df_551 = sources['Partidas'].copy()
                 df_551['_key'] = build_pedimento_key(df_551)
@@ -785,15 +784,10 @@ class Reporte2IvaProveedor(BaseReporte):
             
             tc = pd.to_numeric(df.get('TIPO CAMBIO MXP', 1), errors='coerce').fillna(1).replace(0, 1)
             
-            # El Valor Aduana DLLS ya viene listo (calculado después, pero aquí usamos
-            # la proporción sobre el Valor Comercial DLLS que aproxima el reparto).
-            # Para cuadrar exacto con Ford a nivel proveedor:
-            # Tomamos VA USD del pedimento entero (implícito) -> lo pasamos a MXN con TC
-            va_usd_implicit = df['_valor_aduana_mxn_ped'] / tc
-            va_mxn_recalc = va_usd_implicit * tc
-            
-            # Aplicar proporción del proveedor a todos los componentes normales
-            base_va = va_mxn_recalc * df['_proporcion']
+            # Aplicar proporción del proveedor a todos los componentes
+            # Usar _valor_aduana_mxn_ped directamente (ya está en MXN del 551)
+            # sin conversión MXN→USD→MXN que introduce error de punto flotante
+            base_va = df['_valor_aduana_mxn_ped'] * df['_proporcion']
             base_dta = df['_dta_ped'] * df['_proporcion']
             base_adv = df['_adv_ped'] * df['_proporcion']
 
