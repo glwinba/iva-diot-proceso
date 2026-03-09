@@ -46,6 +46,7 @@ REPORT_SHEETS = {
     'R2_PEND': '2B_IVA_Pendientes',
     'R3': '3_IVA_Consolidado',
     'R4': '4_Facturas',
+    'R4B_EXP': '4b_Facturas Exportación',
     'R5': '5_DatosGenerales',
     'R6': '6_Partidas',
     'R7': '7_Mercancias',

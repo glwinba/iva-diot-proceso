@@ -116,6 +116,11 @@ def main():
     df_r4 = r4.generar(sources)
     if not df_r4.empty:
         reports[REPORT_SHEETS['R4']] = df_r4
+        
+        # Reporte 4b: Facturas de Exportación (filtrado de R4)
+        df_r4_expo = df_r4[df_r4['Tipo Operación'] == 'Exportación'].copy()
+        if not df_r4_expo.empty:
+            reports[REPORT_SHEETS['R4B_EXP']] = df_r4_expo
 
     # Reporte 1: Pedimentos Mensuales (IMP + EXP) — recibe R4 para Venta/NoVenta
     r1 = Reporte1Pedimentos()
