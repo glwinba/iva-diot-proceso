@@ -34,6 +34,7 @@
 # ============================================================================
 
 import pandas as pd
+import numpy as np
 import logging
 from .base_reporte import BaseReporte
 from .reporte_1_pedimentos import build_pedimento_key, build_pedimento_completo
@@ -778,24 +779,46 @@ class Reporte2IvaProveedor(BaseReporte):
             else:
                 df['_iva_real_ped'] = df['_iva_real_ped'].fillna(0.0)
 
-            # === PASO 5: Calcular Base Gravable según FORD (Ajuste Solicitado) ===
-            # Fórmula: Base Gravable = Valor Aduana + DTA + ADV
-            # donde ADV = ClaveContribucion 6 (IGI/Ajuste de Valoración) del 557
-            
+            # === PASO 5: Calcular Base Gravable (Híbrido) ===
+            # Por pedimento:
+            #  - Si Shippers.valor_dls × TC ≈ ValorAduana (diff < 0.1%) → sin CIF → usar valor_dls × TC
+            #    (conserva decimales exactos como Ford)
+            #  - Si hay diferencia significativa (CIF: flete + seguro) → usar ValorAduana × proporción
+            #    (valor completo de aduana)
+
             tc = pd.to_numeric(df.get('TIPO CAMBIO MXP', 1), errors='coerce').fillna(1).replace(0, 1)
-            
-            # Aplicar proporción del proveedor a todos los componentes
-            # Usar _valor_aduana_mxn_ped directamente (ya está en MXN del 551)
-            # sin conversión MXN→USD→MXN que introduce error de punto flotante
-            base_va = df['_valor_aduana_mxn_ped'] * df['_proporcion']
+
+            # Calcular valor Shippers × TC por proveedor (ya está en _valor_dls)
+            df['_ship_mxn'] = df['_valor_dls'] * tc
+
+            # Calcular totales por pedimento para el ratio CIF
+            ship_ped_mxn  = df.groupby('_key')['_ship_mxn'].transform('sum')
+            va_ped_mxn    = df['_valor_aduana_mxn_ped']
+            cif_ratio     = (va_ped_mxn - ship_ped_mxn).abs() / va_ped_mxn.replace(0, 1)
+
+            # Máscara: pedimentos sin CIF significant (Shippers cubre > 99.9% del ValorAduana)
+            sin_cif = cif_ratio < 0.001
+
+            # base_va híbrida:
+            #   - Sin CIF: usar valor_dls × TC por proveedor (decimal exacto)
+            #   - Con CIF: usar ValorAduana × proporción (valor completo)
+            base_va = pd.Series(0.0, index=df.index)
+            base_va[sin_cif]  = df.loc[sin_cif,  '_ship_mxn']
+            base_va[~sin_cif] = df.loc[~sin_cif, '_valor_aduana_mxn_ped'] * df.loc[~sin_cif, '_proporcion']
+
             base_dta = df['_dta_ped'] * df['_proporcion']
             base_adv = df['_adv_ped'] * df['_proporcion']
+
+            n_sin_cif = sin_cif.sum()
+            n_con_cif = (~sin_cif).sum()
+            logger.info(f"   Híbrido BG: {n_sin_cif} proveedores vía Shippers×TC (sin CIF), {n_con_cif} vía ValorAduana×prop (con CIF)")
 
             # Base Gravable = VA + DTA + ADV
             df['Base Gravable MXN'] = base_va + base_dta + base_adv
 
-            # === PASO 6: IVA al 16% = Base Gravable × 0.16 (según FORD) ===
+            # === PASO 6: IVA al 16% = Base Gravable × 0.16 ===
             df['IVA al 16% MXN'] = df['Base Gravable MXN'] * 0.16
+
 
             # === FILTRO CRÍTICO DE CUADRE ===
             # Si NO hubo pago real de IVA (557 CC=3) en el pedimento, la Base Gravable para IVA 16% debe ser 0.
