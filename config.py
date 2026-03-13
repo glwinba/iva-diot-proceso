@@ -61,8 +61,8 @@ CONFIG = {
     "delimiter": "|",
     "encoding": "latin-1",
 
-    # BD - desactivada en desarrollo
-    "insert_to_db": False,
+    # BD - activa solo en producción
+    "insert_to_db": os.getenv("ENVIRONMENT", "desarrollo").lower() == "produccion",
     "db_server": os.getenv("DB_SERVER"),
     "db_database": os.getenv("DB_DATABASE"),
     "db_user": os.getenv("DB_USER"),

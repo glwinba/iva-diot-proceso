@@ -80,21 +80,64 @@ class AscParser:
         """
         sources = {}
 
-        # Auto-extraer archivos .zip que contengan .asc
-        zip_files = list(folder.glob('*.zip'))
-        if zip_files:
-            import zipfile
-            for zf_path in zip_files:
-                try:
-                    with zipfile.ZipFile(zf_path, 'r') as zf:
-                        asc_members = [m for m in zf.namelist() if m.endswith('.asc')]
-                        if asc_members:
-                            zf.extractall(folder, members=asc_members)
-                            logger.info(f"📦 {zf_path.name}: extraídos {len(asc_members)} archivos .asc")
-                except Exception as e:
-                    logger.error(f"Error descomprimiendo {zf_path.name}: {e}")
+        # Auto-extraer archivos .zip (incluyendo ZIPs anidados dentro de ZIPs)
+        import zipfile
+        zip_queue = list(folder.glob('*.zip'))
+        processed_zips = set()
 
-        asc_files = list(folder.glob('*.asc'))
+        while zip_queue:
+            zf_path = zip_queue.pop(0)
+            if zf_path in processed_zips:
+                continue
+            processed_zips.add(zf_path)
+
+            try:
+                with zipfile.ZipFile(zf_path, 'r') as zf:
+                    members = zf.namelist()
+
+                    # Extraer .asc (preservando estructura de carpetas)
+                    asc_members = [m for m in members if m.endswith('.asc')]
+                    if asc_members:
+                        zf.extractall(folder, members=asc_members)
+                        logger.info(f"📦 {zf_path.name}: extraídos {len(asc_members)} archivos .asc")
+
+                    # Extraer .xlsx plano en la carpeta raíz
+                    xlsx_members = [
+                        m for m in members
+                        if m.endswith('.xlsx')
+                        and '__MACOSX' not in m
+                        and not Path(m).name.startswith('~$')
+                    ]
+                    extracted_xlsx = 0
+                    for member in xlsx_members:
+                        filename = Path(member).name
+                        target = folder / filename
+                        if not target.exists():
+                            with zf.open(member) as src, open(target, 'wb') as dst:
+                                dst.write(src.read())
+                            extracted_xlsx += 1
+                    if extracted_xlsx:
+                        logger.info(f"📦 {zf_path.name}: extraídos {extracted_xlsx} archivos .xlsx")
+
+                    # Extraer ZIPs anidados y agregarlos a la cola
+                    nested_zips = [
+                        m for m in members
+                        if m.endswith('.zip') and '__MACOSX' not in m
+                    ]
+                    for member in nested_zips:
+                        filename = Path(member).name
+                        target = folder / filename
+                        if not target.exists():
+                            with zf.open(member) as src, open(target, 'wb') as dst:
+                                dst.write(src.read())
+                        if target not in processed_zips:
+                            zip_queue.append(target)
+                            logger.info(f"📦 ZIP anidado encontrado: {filename} — se procesará")
+
+            except Exception as e:
+                logger.error(f"Error descomprimiendo {zf_path.name}: {e}")
+
+        asc_files = list(folder.rglob('*.asc'))
 
         if not asc_files:
             logger.error(f"No se encontraron archivos .asc en {folder}")
@@ -150,41 +193,50 @@ class AscParser:
                 if not search_dir.exists():
                     continue
                 # Buscar archivos que contengan el keyword (ignorar temporales ~$)
-                matching = [
+                matching = sorted([
                     f for f in search_dir.glob('*.xlsx')
                     if keyword in f.name and not f.name.startswith('~$')
-                ]
+                ])
                 if matching:
-                    filepath = matching[0]
                     password = config.get('password')
-                    try:
-                        if password:
-                            import msoffcrypto
-                            import io
-                            with open(filepath, 'rb') as f_enc:
-                                office_file = msoffcrypto.OfficeFile(f_enc)
-                                office_file.load_key(password=password)
-                                decrypted = io.BytesIO()
-                                office_file.decrypt(decrypted)
-                                decrypted.seek(0)
-                            df = pd.read_excel(
-                                decrypted, engine='openpyxl',
-                                sheet_name=sheet_name, header=header_row,
-                                dtype=str if use_str else None
-                            )
+                    all_dfs = []
+                    for filepath in matching:
+                        try:
+                            if password:
+                                import msoffcrypto
+                                import io
+                                with open(filepath, 'rb') as f_enc:
+                                    office_file = msoffcrypto.OfficeFile(f_enc)
+                                    office_file.load_key(password=password)
+                                    decrypted = io.BytesIO()
+                                    office_file.decrypt(decrypted)
+                                    decrypted.seek(0)
+                                df = pd.read_excel(
+                                    decrypted, engine='openpyxl',
+                                    sheet_name=sheet_name, header=header_row,
+                                    dtype=str if use_str else None
+                                )
+                            else:
+                                df = pd.read_excel(
+                                    filepath, engine='openpyxl',
+                                    sheet_name=sheet_name, header=header_row,
+                                    dtype=str if use_str else None
+                                )
+                            logger.info(f"📊 {filepath.name}"
+                                        f"{'[' + str(sheet_name) + ']' if sheet_name != 0 else ''}"
+                                        f": {len(df):,} registros, {len(df.columns)} columnas")
+                            all_dfs.append(df)
+                        except Exception as e:
+                            logger.error(f"Error leyendo {filepath.name}: {e}")
+
+                    if all_dfs:
+                        if len(all_dfs) > 1:
+                            combined = pd.concat(all_dfs, ignore_index=True)
+                            logger.info(f"   🔗 '{keyword}': {len(all_dfs)} archivos combinados → {len(combined):,} registros totales")
+                            sources[name] = combined
                         else:
-                            df = pd.read_excel(
-                                filepath, engine='openpyxl',
-                                sheet_name=sheet_name, header=header_row,
-                                dtype=str if use_str else None
-                            )
-                        sources[name] = df
-                        logger.info(f"📊 {filepath.name}"
-                                    f"{'[' + str(sheet_name) + ']' if sheet_name != 0 else ''}"
-                                    f": {len(df):,} registros, {len(df.columns)} columnas")
+                            sources[name] = all_dfs[0]
                         found = True
-                    except Exception as e:
-                        logger.error(f"Error leyendo {filepath.name}: {e}")
                     break
 
             if not found:

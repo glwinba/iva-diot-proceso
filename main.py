@@ -56,12 +56,15 @@ def main():
     logger.info("=" * 60)
 
     # --- Inicializar tabla de pendientes en BD ---
-    try:
-        from src.db_pendientes import crear_tabla_si_no_existe
-        crear_tabla_si_no_existe()
-    except Exception as e:
-        logger.warning(f"⚠️  No se pudo inicializar tabla de pendientes: {e}")
-        logger.warning("   El proceso continuará sin persistencia de pendientes")
+    if CONFIG.get('insert_to_db'):
+        try:
+            from src.db_pendientes import crear_tabla_si_no_existe
+            crear_tabla_si_no_existe()
+        except Exception as e:
+            logger.warning(f"⚠️  No se pudo inicializar tabla de pendientes: {e}")
+            logger.warning("   El proceso continuará sin persistencia de pendientes")
+    else:
+        logger.info("ℹ️  BD desactivada (insert_to_db=False) — se omite inicialización de tabla")
 
     # --- Localizar carpeta de entrada ---
     if args.input:

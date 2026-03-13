@@ -507,6 +507,9 @@ class Reporte2IvaProveedor(BaseReporte):
         contra la Póliza Contable del mes actual, y agrega las filas completas
         al df_incluido si matchean.
         """
+        from config import CONFIG
+        insert_to_db = CONFIG.get('insert_to_db')
+
         if not mes_proceso:
             return df_incluido
 
@@ -581,8 +584,8 @@ class Reporte2IvaProveedor(BaseReporte):
         df_matched = df_matched[df_incluido.columns]
 
         # Convertir tipos numéricos
-        for col in ['Base Gravable MXN', 'IVA al 16% MXN', 'TIPO CAMBIO MXP',
-                     'Prevalidación MXN', 'IVA Prevalidación MXN',
+        for col in ['Base Gravable MXN', 'Cálculo IVA Exceptuado', 'IVA al 16% MXN',
+                     'TIPO CAMBIO MXP', 'Prevalidación MXN', 'IVA Prevalidación MXN',
                      'Valor Aduana DLLS', 'Valor Comercial DLLS',
                      'Total Pagado Impuestos MXP', 'Total Pagado Impuestos DLLS']:
             if col in df_matched.columns:
@@ -590,8 +593,9 @@ class Reporte2IvaProveedor(BaseReporte):
 
         logger.info(f"   🔄 {len(df_matched)} filas de pendientes anteriores incluidas en R2 ({len(matched_keys)} pedimentos)")
 
-        # Marcar como utilizados en BD
-        marcar_utilizados(list(matched_keys), mes_proceso)
+        # Marcar como utilizados en BD (solo en producción)
+        if insert_to_db:
+            marcar_utilizados(list(matched_keys), mes_proceso)
 
         # Agregar al incluido
         df_incluido = pd.concat([df_incluido, df_matched], ignore_index=True)
@@ -599,6 +603,11 @@ class Reporte2IvaProveedor(BaseReporte):
 
     def _persistir_pendientes(self, df_excluido: pd.DataFrame, mes_proceso: str):
         """Inserta los nuevos excluidos del mes actual en BD."""
+        from config import CONFIG
+        if not CONFIG.get('insert_to_db'):
+            logger.info("   ℹ️  BD desactivada (insert_to_db=False) — se omite inserción de pendientes")
+            return
+
         if not mes_proceso or df_excluido.empty:
             return
 
@@ -779,44 +788,20 @@ class Reporte2IvaProveedor(BaseReporte):
             else:
                 df['_iva_real_ped'] = df['_iva_real_ped'].fillna(0.0)
 
-            # === PASO 5: Calcular Base Gravable (Híbrido) ===
-            # Por pedimento:
-            #  - Si Shippers.valor_dls × TC ≈ ValorAduana (diff < 0.1%) → sin CIF → usar valor_dls × TC
-            #    (conserva decimales exactos como Ford)
-            #  - Si hay diferencia significativa (CIF: flete + seguro) → usar ValorAduana × proporción
-            #    (valor completo de aduana)
+            # === PASO 5: Calcular Base Gravable según FORD ===
+            # Fórmula: ValorAduana MXN (del 551, entero por pedimento) × proporción del proveedor + DTA + ADV
+            # Es el método más cercano al total de Ford (diferencia residual ~10.59 MXN = redondeo ASC del SAT)
 
             tc = pd.to_numeric(df.get('TIPO CAMBIO MXP', 1), errors='coerce').fillna(1).replace(0, 1)
 
-            # Calcular valor Shippers × TC por proveedor (ya está en _valor_dls)
-            df['_ship_mxn'] = df['_valor_dls'] * tc
-
-            # Calcular totales por pedimento para el ratio CIF
-            ship_ped_mxn  = df.groupby('_key')['_ship_mxn'].transform('sum')
-            va_ped_mxn    = df['_valor_aduana_mxn_ped']
-            cif_ratio     = (va_ped_mxn - ship_ped_mxn).abs() / va_ped_mxn.replace(0, 1)
-
-            # Máscara: pedimentos sin CIF significant (Shippers cubre > 99.9% del ValorAduana)
-            sin_cif = cif_ratio < 0.001
-
-            # base_va híbrida:
-            #   - Sin CIF: usar valor_dls × TC por proveedor (decimal exacto)
-            #   - Con CIF: usar ValorAduana × proporción (valor completo)
-            base_va = pd.Series(0.0, index=df.index)
-            base_va[sin_cif]  = df.loc[sin_cif,  '_ship_mxn']
-            base_va[~sin_cif] = df.loc[~sin_cif, '_valor_aduana_mxn_ped'] * df.loc[~sin_cif, '_proporcion']
-
+            base_va  = df['_valor_aduana_mxn_ped'] * df['_proporcion']
             base_dta = df['_dta_ped'] * df['_proporcion']
             base_adv = df['_adv_ped'] * df['_proporcion']
 
-            n_sin_cif = sin_cif.sum()
-            n_con_cif = (~sin_cif).sum()
-            logger.info(f"   Híbrido BG: {n_sin_cif} proveedores vía Shippers×TC (sin CIF), {n_con_cif} vía ValorAduana×prop (con CIF)")
-
-            # Base Gravable = VA + DTA + ADV
+            # Base Gravable = VA + DTA + ADV (flotante directo, sin redondeo)
             df['Base Gravable MXN'] = base_va + base_dta + base_adv
 
-            # === PASO 6: IVA al 16% = Base Gravable × 0.16 ===
+            # === PASO 6: IVA al 16% = Base Gravable × 0.16 (flotante directo, sin redondeo) ===
             df['IVA al 16% MXN'] = df['Base Gravable MXN'] * 0.16
 
 
@@ -1687,7 +1672,7 @@ class Reporte2IvaProveedor(BaseReporte):
                  'Prevalidación MXN': total_prev + exc_prev,
                  'IVA Prevalidación MXN': total_iva_prev + exc_iva_prev},
                 # Delta (Verificación - DS ≈ 0)
-                {'Nacionalidad': '', 'Base Gravable MXN': verif_base - ds_base,
+                {'Nacionalidad': 'Diferencia Total vs DataStage', 'Base Gravable MXN': verif_base - ds_base,
                  'Cálculo IVA Exceptuado': total_iva_exceptuado - ds_iva_exceptuado,
                  'IVA al 16% MXN': verif_iva - ds_iva,
                  'Prevalidación MXN': (total_prev + exc_prev) - ds_prev,
